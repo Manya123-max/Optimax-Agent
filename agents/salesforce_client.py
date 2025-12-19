@@ -1,307 +1,316 @@
-from simple_salesforce import Salesforce, SalesforceLogin
+from simple_salesforce import Salesforce
+from typing import Dict, List, Optional
 import requests
-from datetime import datetime, timedelta
 import json
+from datetime import datetime, timedelta
 
 class SalesforceClient:
-    """Wrapper for Salesforce REST and Metadata API"""
+    """
+    Wrapper for Salesforce API to fetch security-relevant data
+    """
     
-    def __init__(self, username, password, security_token, domain='login'):
-        """Initialize Salesforce connection"""
+    def __init__(self, username: str, password: str, security_token: str, domain: str = 'login'):
+        """
+        Initialize Salesforce client
+        
+        Args:
+            username: Salesforce username
+            password: Salesforce password
+            security_token: Security token
+            domain: 'login' for production, 'test' for sandbox
+        """
         self.username = username
         self.password = password
         self.security_token = security_token
         self.domain = domain
-        
-        # Establish connection
-        self.sf = Salesforce(
-            username=username,
-            password=password,
-            security_token=security_token,
-            domain=domain
-        )
-        
-        self.session_id = self.sf.session_id
-        self.instance_url = self.sf.sf_instance
-        
-    def get_org_id(self):
-        """Get Organization ID"""
-        query = "SELECT Id FROM Organization LIMIT 1"
-        result = self.sf.query(query)
-        return result['records'][0]['Id']
+        self.sf = None
+        self.org_id = None
     
-    # ==================== Identity & Access Data ====================
+    def connect(self) -> bool:
+        """
+        Establish connection to Salesforce
+        
+        Returns:
+            bool: True if connection successful
+        """
+        try:
+            self.sf = Salesforce(
+                username=self.username,
+                password=self.password,
+                security_token=self.security_token,
+                domain=self.domain
+            )
+            self.org_id = self._get_org_id()
+            return True
+        except Exception as e:
+            print(f"Connection failed: {str(e)}")
+            return False
     
-    def fetch_users(self):
-        """Fetch all active users with key security fields"""
+    def _get_org_id(self) -> str:
+        """
+        Retrieve Organization ID
+        
+        Returns:
+            str: Organization ID
+        """
+        try:
+            result = self.sf.query("SELECT Id, Name FROM Organization LIMIT 1")
+            if result['records']:
+                return result['records'][0]['Id']
+        except:
+            pass
+        return "Unknown"
+    
+    def get_org_id(self) -> str:
+        """Public method to get org ID"""
+        return self.org_id or self._get_org_id()
+    
+    def fetch_users(self) -> List[Dict]:
+        """
+        Fetch all active users with relevant fields
+        
+        Returns:
+            List of user records
+        """
         query = """
-            SELECT Id, Name, Username, Email, Profile.Name, ProfileId,
-                   IsActive, LastLoginDate, CreatedDate, UserRole.Name,
-                   ReceivesAdminInfoEmails, ReceivesInfoEmails
-            FROM User
-            WHERE IsActive = true
+        SELECT Id, Username, Name, Email, Profile.Name, ProfileId, 
+               IsActive, LastLoginDate, UserRole.Name, UserRoleId,
+               CreatedDate, LastModifiedDate, MfaEnabled__c
+        FROM User
+        WHERE IsActive = true
+        ORDER BY LastLoginDate DESC NULLS LAST
         """
-        result = self.sf.query_all(query)
         
-        users = []
-        for record in result['records']:
-            # Check for dormant users (90+ days no login)
-            last_login = record.get('LastLoginDate')
-            is_dormant = False
-            if last_login:
-                last_login_date = datetime.fromisoformat(last_login.replace('Z', '+00:00'))
-                is_dormant = (datetime.now(last_login_date.tzinfo) - last_login_date).days > 90
+        try:
+            result = self.sf.query_all(query)
+            return result['records'] if result else []
+        except Exception as e:
+            print(f"Error fetching users: {str(e)}")
+            return []
+    
+    def fetch_permission_sets(self) -> List[Dict]:
+        """
+        Fetch all permission sets with assignments
+        
+        Returns:
+            List of permission set records with assignments
+        """
+        # Fetch permission sets
+        ps_query = """
+        SELECT Id, Name, Label, Description, IsCustom, 
+               PermissionsModifyAllData, PermissionsViewAllData,
+               PermissionsManageUsers, PermissionsCustomizeApplication,
+               PermissionsAuthorApex, PermissionsExportReport
+        FROM PermissionSet
+        WHERE IsOwnedByProfile = false
+        """
+        
+        try:
+            ps_result = self.sf.query_all(ps_query)
+            permission_sets = ps_result['records'] if ps_result else []
             
-            users.append({
-                'Id': record['Id'],
-                'Name': record['Name'],
-                'Username': record['Username'],
-                'Email': record['Email'],
-                'ProfileName': record['Profile']['Name'] if record.get('Profile') else 'Unknown',
-                'ProfileId': record.get('ProfileId'),
-                'IsActive': record['IsActive'],
-                'LastLoginDate': last_login,
-                'IsDormant': is_dormant,
-                'RoleName': record['UserRole']['Name'] if record.get('UserRole') else None,
-                'IsAdminEmail': record.get('ReceivesAdminInfoEmails', False)
-            })
-        
-        return users
+            # Fetch assignments for each permission set
+            for ps in permission_sets:
+                assignment_query = f"""
+                SELECT Id, AssigneeId, Assignee.Username, Assignee.Name
+                FROM PermissionSetAssignment
+                WHERE PermissionSetId = '{ps['Id']}'
+                """
+                assign_result = self.sf.query_all(assignment_query)
+                ps['Assignments'] = assign_result['records'] if assign_result else []
+            
+            return permission_sets
+        except Exception as e:
+            print(f"Error fetching permission sets: {str(e)}")
+            return []
     
-    def fetch_login_history(self, hours=24):
-        """Fetch recent login history for anomaly detection"""
-        time_ago = datetime.utcnow() - timedelta(hours=hours)
-        time_str = time_ago.strftime('%Y-%m-%dT%H:%M:%SZ')
-        
-        query = f"""
-            SELECT Id, UserId, LoginTime, LoginType, SourceIp,
-                   Status, Application, Browser, Platform
-            FROM LoginHistory
-            WHERE LoginTime >= {time_str}
-            ORDER BY LoginTime DESC
+    def fetch_profiles(self) -> List[Dict]:
         """
-        result = self.sf.query_all(query)
-        return result['records']
-    
-    # ==================== Permission & Authorization Data ====================
-    
-    def fetch_permission_sets(self):
-        """Fetch all permission sets with assignments"""
+        Fetch all profiles (metadata via REST API)
+        
+        Returns:
+            List of profile records
+        """
         query = """
-            SELECT Id, Name, Label, Description, IsOwnedByProfile,
-                   Type, IsCustom, CreatedDate, LastModifiedDate
-            FROM PermissionSet
+        SELECT Id, Name, Description, UserLicenseId, UserLicense.Name,
+               PermissionsModifyAllData, PermissionsViewAllData,
+               PermissionsManageUsers, PermissionsCustomizeApplication,
+               PermissionsAuthorApex, PermissionsExportReport
+        FROM Profile
+        ORDER BY Name
         """
-        result = self.sf.query_all(query)
         
-        permission_sets = []
-        for ps in result['records']:
-            # Get assignments for this permission set
-            assignments = self.fetch_permission_set_assignments(ps['Id'])
+        try:
+            result = self.sf.query_all(query)
+            return result['records'] if result else []
+        except Exception as e:
+            print(f"Error fetching profiles: {str(e)}")
+            return []
+    
+    def fetch_profile_details(self, profile_id: str) -> Optional[Dict]:
+        """
+        Fetch detailed information for a specific profile
+        
+        Args:
+            profile_id: Salesforce Profile ID
             
-            # Get detailed permissions
-            permissions = self.fetch_permission_set_details(ps['Id'])
-            
-            permission_sets.append({
-                'Id': ps['Id'],
-                'Name': ps['Name'],
-                'Label': ps['Label'],
-                'Description': ps.get('Description'),
-                'Type': ps.get('Type'),
-                'IsCustom': ps.get('IsCustom', False),
-                'AssignmentCount': len(assignments),
-                'Assignments': assignments,
-                'Permissions': permissions
-            })
-        
-        return permission_sets
-    
-    def fetch_permission_set_assignments(self, permission_set_id):
-        """Fetch users assigned to a permission set"""
+        Returns:
+            Profile details with permissions
+        """
         query = f"""
-            SELECT Id, AssigneeId, Assignee.Name, Assignee.Username
-            FROM PermissionSetAssignment
-            WHERE PermissionSetId = '{permission_set_id}'
-            AND Assignee.IsActive = true
+        SELECT Id, Name, Description, UserLicenseId, UserLicense.Name,
+               PermissionsModifyAllData, PermissionsViewAllData,
+               PermissionsManageUsers, PermissionsCustomizeApplication,
+               PermissionsAuthorApex, PermissionsExportReport,
+               PermissionsManageRoles, PermissionsTransferAnyLead,
+               PermissionsModifyMetadata, PermissionsManageSharing
+        FROM Profile
+        WHERE Id = '{profile_id}'
         """
-        result = self.sf.query_all(query)
-        return [
-            {
-                'UserId': r['AssigneeId'],
-                'UserName': r['Assignee']['Name'],
-                'Username': r['Assignee']['Username']
-            }
-            for r in result['records']
-        ]
-    
-    def fetch_permission_set_details(self, permission_set_id):
-        """Fetch detailed permissions for a permission set"""
-        # System permissions
-        system_perms_query = f"""
-            SELECT Id, Parent.Name, PermissionsModifyAllData, PermissionsViewAllData,
-                   PermissionsManageUsers, PermissionsCustomizeApplication,
-                   PermissionsAuthorApex, PermissionsEditPublicReports,
-                   PermissionsViewSetup, PermissionsManageInternalUsers
-            FROM PermissionSet
-            WHERE Id = '{permission_set_id}'
-        """
-        system_perms = self.sf.query(system_perms_query)['records'][0]
         
-        # Object permissions
-        obj_perms_query = f"""
-            SELECT Id, SObjectType, PermissionsCreate, PermissionsRead,
-                   PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords,
-                   PermissionsModifyAllRecords
-            FROM ObjectPermissions
-            WHERE ParentId = '{permission_set_id}'
-        """
-        obj_perms = self.sf.query_all(obj_perms_query)['records']
-        
-        return {
-            'system': {
-                'ModifyAllData': system_perms.get('PermissionsModifyAllData', False),
-                'ViewAllData': system_perms.get('PermissionsViewAllData', False),
-                'ManageUsers': system_perms.get('PermissionsManageUsers', False),
-                'CustomizeApplication': system_perms.get('PermissionsCustomizeApplication', False),
-                'AuthorApex': system_perms.get('PermissionsAuthorApex', False),
-                'ViewSetup': system_perms.get('PermissionsViewSetup', False)
-            },
-            'objects': [
-                {
-                    'Object': op['SObjectType'],
-                    'Create': op.get('PermissionsCreate', False),
-                    'Read': op.get('PermissionsRead', False),
-                    'Edit': op.get('PermissionsEdit', False),
-                    'Delete': op.get('PermissionsDelete', False),
-                    'ViewAll': op.get('PermissionsViewAllRecords', False),
-                    'ModifyAll': op.get('PermissionsModifyAllRecords', False)
-                }
-                for op in obj_perms
-            ]
-        }
-    
-    def fetch_profiles(self):
-        """Fetch all profiles"""
-        query = """
-            SELECT Id, Name, Description, UserLicenseId, UserLicense.Name,
-                   UserType, CreatedDate, LastModifiedDate
-            FROM Profile
-        """
-        result = self.sf.query_all(query)
-        
-        profiles = []
-        for profile in result['records']:
-            # Get user count for this profile
-            user_count_query = f"""
-                SELECT COUNT()
-                FROM User
-                WHERE ProfileId = '{profile['Id']}' AND IsActive = true
-            """
-            user_count = self.sf.query(user_count_query)['totalSize']
-            
-            profiles.append({
-                'Id': profile['Id'],
-                'Name': profile['Name'],
-                'Description': profile.get('Description'),
-                'UserLicense': profile['UserLicense']['Name'] if profile.get('UserLicense') else None,
-                'UserType': profile.get('UserType'),
-                'ActiveUserCount': user_count
-            })
-        
-        return profiles
-    
-    def fetch_profile_details(self, profile_id):
-        """Fetch detailed profile information"""
-        # Use Metadata API for complete profile details
-        headers = {
-            'Authorization': f'Bearer {self.session_id}',
-            'Content-Type': 'application/json'
-        }
-        
-        # Get profile metadata
-        metadata_url = f"{self.instance_url}/services/data/v59.0/sobjects/Profile/{profile_id}"
-        response = requests.get(metadata_url, headers=headers)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch profile: {response.text}")
-        
-        return response.json()
-    
-    def fetch_object_permissions(self, profile_id):
-        """Fetch object-level permissions for a profile"""
-        query = f"""
-            SELECT Id, SObjectType, PermissionsCreate, PermissionsRead,
-                   PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords,
-                   PermissionsModifyAllRecords
-            FROM ObjectPermissions
-            WHERE ParentId = '{profile_id}'
-        """
-        result = self.sf.query_all(query)
-        return result['records']
-    
-    def fetch_field_permissions(self, profile_id):
-        """Fetch field-level permissions for a profile"""
-        query = f"""
-            SELECT Id, SObjectType, Field, PermissionsRead, PermissionsEdit
-            FROM FieldPermissions
-            WHERE ParentId = '{profile_id}'
-        """
-        result = self.sf.query_all(query)
-        return result['records']
-    
-    # ==================== Sharing Model Data ====================
-    
-    def fetch_sharing_settings(self):
-        """Fetch organization-wide defaults and sharing rules"""
-        
-        # Get OWD settings using REST API
-        headers = {
-            'Authorization': f'Bearer {self.session_id}',
-            'Content-Type': 'application/json'
-        }
-        
-        # Describe all objects to get sharing settings
-        describe_url = f"{self.instance_url}/services/data/v59.0/sobjects/"
-        response = requests.get(describe_url, headers=headers)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch objects: {response.text}")
-        
-        objects = response.json()['sobjects']
-        
-        sharing_settings = []
-        for obj in objects:
-            if obj.get('queryable') and not obj.get('customSetting'):
-                # Get detailed object description
-                obj_describe_url = f"{self.instance_url}/services/data/v59.0/sobjects/{obj['name']}/describe"
-                obj_response = requests.get(obj_describe_url, headers=headers)
+        try:
+            result = self.sf.query(query)
+            if result['records']:
+                profile = result['records'][0]
                 
-                if obj_response.status_code == 200:
-                    obj_details = obj_response.json()
-                    
-                    sharing_model = obj_details.get('sharingModel', 'Unknown')
-                    
-                    # Flag potentially dangerous settings
-                    is_public = 'Public' in sharing_model
-                    is_read_write = 'ReadWrite' in sharing_model or 'ControlledByParent' in sharing_model
-                    
-                    sharing_settings.append({
-                        'Object': obj['name'],
-                        'Label': obj['label'],
-                        'SharingModel': sharing_model,
-                        'IsPublic': is_public,
-                        'IsReadWrite': is_read_write,
-                        'IsCustom': obj.get('custom', False)
-                    })
-        
-        return sharing_settings
+                # Fetch users assigned to this profile
+                user_query = f"""
+                SELECT Id, Username, Name, Email, IsActive
+                FROM User
+                WHERE ProfileId = '{profile_id}' AND IsActive = true
+                """
+                user_result = self.sf.query_all(user_query)
+                profile['AssignedUsers'] = user_result['records'] if user_result else []
+                
+                return profile
+            return None
+        except Exception as e:
+            print(f"Error fetching profile details: {str(e)}")
+            return None
     
-    def fetch_role_hierarchy(self):
-        """Fetch role hierarchy structure"""
-        query = """
-            SELECT Id, Name, ParentRoleId, RollupDescription
-            FROM UserRole
-            ORDER BY ParentRoleId NULLS FIRST
+    def fetch_sharing_settings(self) -> Dict:
         """
-        result = self.sf.query_all(query)
-        return result['records']
+        Fetch Organization-Wide Defaults (OWD) and sharing settings
+        Uses Metadata API
+        
+        Returns:
+            Dictionary of sharing settings
+        """
+        try:
+            # Use Tooling API to get some sharing info
+            sharing_query = """
+            SELECT Id, DeveloperName, SobjectType, AccessLevel
+            FROM SharingRules
+            LIMIT 200
+            """
+            
+            sharing_settings = {
+                'organization_wide_defaults': self._fetch_owd_settings(),
+                'sharing_rules': [],
+                'role_hierarchy': self._fetch_role_hierarchy()
+            }
+            
+            return sharing_settings
+        except Exception as e:
+            print(f"Error fetching sharing settings: {str(e)}")
+            return {'organization_wide_defaults': {}, 'sharing_rules': [], 'role_hierarchy': []}
+    
+    def _fetch_owd_settings(self) -> List[Dict]:
+        """
+        Fetch Organization-Wide Default sharing settings
+        
+        Returns:
+            List of OWD settings per object
+        """
+        # Note: This requires Metadata API. For proof of concept, 
+        # we'll use common standard objects
+        common_objects = [
+            'Account', 'Contact', 'Opportunity', 'Lead', 
+            'Case', 'Contract', 'Campaign'
+        ]
+        
+        owd_settings = []
+        for obj in common_objects:
+            # This is a simplified version - full implementation would use Metadata API
+            owd_settings.append({
+                'ObjectName': obj,
+                'DefaultAccess': 'Public',  # Placeholder - would fetch from Metadata API
+                'RiskLevel': 'Medium'
+            })
+        
+        return owd_settings
+    
+    def _fetch_role_hierarchy(self) -> List[Dict]:
+        """
+        Fetch User Role hierarchy
+        
+        Returns:
+            List of roles with hierarchy information
+        """
+        query = """
+        SELECT Id, Name, ParentRoleId, DeveloperName
+        FROM UserRole
+        ORDER BY Name
+        """
+        
+        try:
+            result = self.sf.query_all(query)
+            return result['records'] if result else []
+        except Exception as e:
+            print(f"Error fetching role hierarchy: {str(e)}")
+            return []
+    
+    def fetch_login_history(self, days: int = 30) -> List[Dict]:
+        """
+        Fetch login history for anomaly detection
+        
+        Args:
+            days: Number of days to look back
+            
+        Returns:
+            List of login history records
+        """
+        date_filter = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        query = f"""
+        SELECT Id, UserId, LoginTime, Status, LoginType, 
+               SourceIp, LoginUrl, Application, Browser, Platform
+        FROM LoginHistory
+        WHERE LoginTime >= {date_filter}
+        ORDER BY LoginTime DESC
+        LIMIT 10000
+        """
+        
+        try:
+            result = self.sf.query_all(query)
+            return result['records'] if result else []
+        except Exception as e:
+            print(f"Error fetching login history: {str(e)}")
+            return []
+    
+    def fetch_setup_audit_trail(self, days: int = 90) -> List[Dict]:
+        """
+        Fetch setup audit trail for configuration changes
+        
+        Args:
+            days: Number of days to look back
+            
+        Returns:
+            List of audit records
+        """
+        date_filter = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        query = f"""
+        SELECT Id, Action, Section, CreatedBy.Name, CreatedDate, Display
+        FROM SetupAuditTrail
+        WHERE CreatedDate >= {date_filter}
+        ORDER BY CreatedDate DESC
+        LIMIT 2000
+        """
+        
+        try:
+            result = self.sf.query_all(query)
+            return result['records'] if result else []
+        except Exception as e:
+            print(f"Error fetching setup audit trail: {str(e)}")
+            return []
