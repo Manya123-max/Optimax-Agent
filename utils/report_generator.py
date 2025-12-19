@@ -1,301 +1,307 @@
-"""
-Report Generation Utilities
-Formats security findings into human-readable reports
-"""
-
-import json
+from typing import Dict, List
 from datetime import datetime
-from typing import List, Dict, Any
 
 class ReportGenerator:
-    """Generates formatted security reports"""
+    """
+    Generates formatted security analysis reports
+    """
     
-    SEVERITY_COLORS = {
-        'critical': '🔴',
-        'high': '🟠',
-        'medium': '🟡',
-        'low': '🔵',
-        'info': 'ℹ️'
-    }
-    
-    SEVERITY_PRIORITY = {
-        'critical': 1,
-        'high': 2,
-        'medium': 3,
-        'low': 4,
-        'info': 5
-    }
-    
-    @staticmethod
-    def generate_executive_summary(findings: List[Dict], data: Dict) -> str:
-        """Generate executive summary section"""
+    def generate_full_report(self, analysis: Dict, org_id: str) -> str:
+        """
+        Generate comprehensive organization security report
         
-        severity_counts = {
-            'critical': len([f for f in findings if f['severity'] == 'critical']),
-            'high': len([f for f in findings if f['severity'] == 'high']),
-            'medium': len([f for f in findings if f['severity'] == 'medium']),
-            'low': len([f for f in findings if f['severity'] == 'low'])
-        }
+        Args:
+            analysis: Complete analysis results
+            org_id: Salesforce organization ID
+            
+        Returns:
+            Formatted markdown report
+        """
+        report_lines = []
         
-        total_issues = sum(severity_counts.values())
+        # Header
+        report_lines.append("# 🛡️ Salesforce Security Analysis Report")
+        report_lines.append(f"**Organization ID**: {org_id}")
+        report_lines.append(f"**Report Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        report_lines.append("\n---\n")
         
-        summary = f"""
-# SALESFORCE SECURITY ANALYSIS REPORT
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Organization ID: {data.get('org_id', 'N/A')}
-
-## EXECUTIVE SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**Total Issues Found: {total_issues}**
-
-Severity Breakdown:
-├── 🔴 Critical: {severity_counts['critical']}
-├── 🟠 High:     {severity_counts['high']}
-├── 🟡 Medium:   {severity_counts['medium']}
-└── 🔵 Low:      {severity_counts['low']}
-
-"""
+        # Executive Summary
+        report_lines.append("## 📊 Executive Summary")
+        metrics = analysis.get('metrics', {})
+        report_lines.append(f"- **Total Security Findings**: {metrics.get('total_findings', 0)}")
+        report_lines.append(f"- **Critical Issues**: {metrics.get('critical_count', 0)} 🔴")
+        report_lines.append(f"- **High Risk Issues**: {metrics.get('high_count', 0)} 🟠")
+        report_lines.append(f"- **Medium Risk Issues**: {metrics.get('medium_count', 0)} 🟡")
+        report_lines.append(f"- **Overall Risk Score**: {metrics.get('overall_risk_score', 0)}/100")
         
-        # Add key metrics
-        stats = data.get('summary', {})
-        summary += f"""
-**Organization Metrics:**
-- Total Users: {stats.get('total_users', 0)}
-- Admin Users: {stats.get('admin_users', 0)}
-- Dormant Accounts: {stats.get('dormant_users', 0)}
-- Permission Sets: {stats.get('permission_sets', 0)}
-- Profiles: {stats.get('profiles', 0)}
-
-**Security Posture:** """
-        
-        if severity_counts['critical'] > 0:
-            summary += "⚠️ CRITICAL - Immediate action required"
-        elif severity_counts['high'] > 5:
-            summary += "⚠️ HIGH RISK - Urgent remediation needed"
-        elif severity_counts['high'] > 0:
-            summary += "⚠️ MODERATE RISK - Address high priority items"
+        # Risk level indicator
+        risk_score = metrics.get('overall_risk_score', 0)
+        if risk_score >= 70:
+            report_lines.append("\n🚨 **CRITICAL RISK LEVEL** - Immediate action required!")
+        elif risk_score >= 40:
+            report_lines.append("\n⚠️ **HIGH RISK LEVEL** - Prioritize remediation")
         else:
-            summary += "✅ GOOD - Minor issues to address"
+            report_lines.append("\n✅ **MODERATE RISK LEVEL** - Continue monitoring")
         
-        summary += "\n\n"
-        return summary
-    
-    @staticmethod
-    def format_findings_by_severity(findings: List[Dict]) -> str:
-        """Format findings grouped by severity"""
+        report_lines.append("\n---\n")
         
-        report = ""
-        
-        # Sort findings by severity
-        sorted_findings = sorted(
-            findings,
-            key=lambda x: ReportGenerator.SEVERITY_PRIORITY.get(x['severity'], 99)
-        )
-        
-        # Group by severity
-        grouped = {}
-        for finding in sorted_findings:
-            severity = finding['severity']
-            if severity not in grouped:
-                grouped[severity] = []
-            grouped[severity].append(finding)
-        
-        # Generate sections
-        for severity in ['critical', 'high', 'medium', 'low']:
-            if severity not in grouped:
-                continue
+        # Critical Findings
+        if analysis.get('critical_findings'):
+            report_lines.append("## 🔴 Critical Findings")
+            report_lines.append("*These issues require immediate attention*\n")
             
-            severity_findings = grouped[severity]
-            icon = ReportGenerator.SEVERITY_COLORS.get(severity, '•')
+            for idx, finding in enumerate(analysis['critical_findings'][:10], 1):
+                report_lines.append(f"### {idx}. {finding.get('type', 'Security Issue')}")
+                report_lines.append(f"**Description**: {finding.get('description', 'N/A')}")
+                report_lines.append(f"**Impact**: {finding.get('impact', 'N/A')}")
+                report_lines.append(f"**Recommendation**: {finding.get('recommendation', 'Review and remediate')}")
+                
+                # Add specific details based on finding type
+                if finding.get('affected_users'):
+                    users = finding['affected_users'][:5]
+                    report_lines.append(f"**Affected Users**: {', '.join(users)}")
+                    if len(finding['affected_users']) > 5:
+                        report_lines.append(f"   *(and {len(finding['affected_users']) - 5} more)*")
+                
+                report_lines.append("")
             
-            report += f"\n## {severity.upper()} FINDINGS ({len(severity_findings)})\n"
-            report += "━" * 80 + "\n\n"
+            report_lines.append("\n---\n")
+        
+        # High Risk Findings
+        if analysis.get('high_risk_findings'):
+            report_lines.append("## 🟠 High Risk Findings")
+            report_lines.append("*Address these issues as soon as possible*\n")
             
-            for idx, finding in enumerate(severity_findings, 1):
-                report += ReportGenerator._format_single_finding(finding, icon, idx)
+            for idx, finding in enumerate(analysis['high_risk_findings'][:10], 1):
+                report_lines.append(f"### {idx}. {finding.get('type', 'Security Issue')}")
+                report_lines.append(f"- **Description**: {finding.get('description', 'N/A')}")
+                report_lines.append(f"- **Recommendation**: {finding.get('recommendation', 'Review and remediate')}")
+                report_lines.append("")
+            
+            report_lines.append("\n---\n")
         
-        return report
+        # Identity & Access Findings
+        identity_findings = analysis.get('identity_findings', {})
+        if identity_findings.get('findings'):
+            report_lines.append("## 👤 Identity & Access Management")
+            report_lines.append(f"- **Total Users Analyzed**: {identity_findings.get('total_users', 0)}")
+            report_lines.append(f"- **Active Users**: {identity_findings.get('active_users', 0)}")
+            report_lines.append(f"- **Admin Users**: {identity_findings.get('admin_users', 0)}")
+            report_lines.append("")
+            
+            identity_issues = [f for f in identity_findings['findings'] if f.get('severity') in ['Critical', 'High']]
+            if identity_issues:
+                report_lines.append("**Key Issues:**")
+                for finding in identity_issues[:5]:
+                    report_lines.append(f"- {finding.get('description', 'N/A')}")
+            
+            report_lines.append("\n---\n")
+        
+        # Permission Findings
+        permission_findings = analysis.get('permission_findings', {})
+        if permission_findings:
+            report_lines.append("## 🔐 Permissions & Authorization")
+            report_lines.append(f"- **Permission Sets Analyzed**: {permission_findings.get('permission_sets_analyzed', 0)}")
+            report_lines.append(f"- **Profiles Analyzed**: {permission_findings.get('profiles_analyzed', 0)}")
+            report_lines.append(f"- **Dangerous Assignments**: {permission_findings.get('dangerous_assignments', 0)}")
+            report_lines.append("\n---\n")
+        
+        # Sharing Model Findings
+        sharing_findings = analysis.get('sharing_findings', {})
+        if sharing_findings:
+            report_lines.append("## 🌐 Sharing Model Security")
+            report_lines.append(f"- **Objects with OWD Settings**: {sharing_findings.get('owd_objects_analyzed', 0)}")
+            report_lines.append(f"- **Roles Analyzed**: {sharing_findings.get('roles_analyzed', 0)}")
+            report_lines.append(f"- **Sharing Rules**: {sharing_findings.get('sharing_rules_analyzed', 0)}")
+            report_lines.append("\n---\n")
+        
+        # AI Recommendations (if available)
+        if analysis.get('ai_recommendations'):
+            report_lines.append("## 🤖 AI-Powered Recommendations")
+            report_lines.append(analysis['ai_recommendations'])
+            report_lines.append("\n---\n")
+        
+        # Top Recommendations
+        report_lines.append("## 📋 Prioritized Action Items")
+        report_lines.append("")
+        
+        priority_actions = self._generate_priority_actions(analysis)
+        for idx, action in enumerate(priority_actions, 1):
+            report_lines.append(f"{idx}. **{action['title']}**")
+            report_lines.append(f"   - {action['description']}")
+            report_lines.append("")
+        
+        # Footer
+        report_lines.append("\n---\n")
+        report_lines.append("## 📚 Resources")
+        report_lines.append("- [Salesforce Security Best Practices](https://developer.salesforce.com/docs/atlas.en-us.securityImplGuide.meta/securityImplGuide/)")
+        report_lines.append("- [Security Health Check](https://help.salesforce.com/s/articleView?id=sf.security_health_check.htm)")
+        report_lines.append("- [Permission Sets Best Practices](https://help.salesforce.com/s/articleView?id=sf.perm_sets_overview.htm)")
+        
+        report_lines.append("\n---\n")
+        report_lines.append("*Report generated by Salesforce Security Analyzer powered by CodeGen AI*")
+        
+        return "\n".join(report_lines)
     
-    @staticmethod
-    def _format_single_finding(finding: Dict, icon: str, number: int) -> str:
-        """Format a single finding"""
+    def generate_profile_report(self, analysis: Dict, profile_id: str) -> str:
+        """
+        Generate profile-specific security report
         
-        output = f"{icon} **Finding #{number}: {finding['title']}**\n"
-        output += f"   Category: {finding.get('type', finding.get('category', 'N/A'))}\n"
-        output += f"   Description: {finding['detail']}\n"
+        Args:
+            analysis: Profile analysis results
+            profile_id: Salesforce profile ID
+            
+        Returns:
+            Formatted markdown report
+        """
+        report_lines = []
         
-        # Add affected items
-        if finding.get('users'):
-            users = finding['users'][:5]  # Show first 5
-            output += f"   Affected Users: {', '.join(users)}"
-            if len(finding['users']) > 5:
-                output += f" (+{len(finding['users']) - 5} more)"
-            output += "\n"
+        # Header
+        report_lines.append("# 👤 Profile Security Analysis Report")
+        report_lines.append(f"**Profile Name**: {analysis.get('profile_name', 'Unknown')}")
+        report_lines.append(f"**Profile ID**: {profile_id}")
+        report_lines.append(f"**Report Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        report_lines.append("\n---\n")
         
-        if finding.get('affected_objects'):
-            objects = finding['affected_objects'][:5]
-            output += f"   Affected Objects: {', '.join(objects)}"
-            if len(finding.get('affected_objects', [])) > 5:
-                output += f" (+{len(finding['affected_objects']) - 5} more)"
-            output += "\n"
+        # Summary
+        report_lines.append("## 📊 Profile Summary")
+        report_lines.append(f"- **Assigned Users**: {analysis.get('assigned_users_count', 0)}")
+        report_lines.append(f"- **Risk Score**: {analysis.get('risk_score', 0)}/100")
+        report_lines.append(f"- **Dangerous Permissions**: {len(analysis.get('dangerous_permissions', []))}")
+        report_lines.append("")
         
-        output += "\n"
-        return output
+        # Risk indicator
+        risk_score = analysis.get('risk_score', 0)
+        if risk_score >= 70:
+            report_lines.append("🚨 **HIGH RISK PROFILE** - Immediate review required")
+        elif risk_score >= 40:
+            report_lines.append("⚠️ **MEDIUM RISK PROFILE** - Review recommended")
+        else:
+            report_lines.append("✅ **LOW RISK PROFILE** - No immediate concerns")
+        
+        report_lines.append("\n---\n")
+        
+        # Dangerous Permissions
+        if analysis.get('dangerous_permissions'):
+            report_lines.append("## ⚠️ Dangerous Permissions Detected")
+            report_lines.append("")
+            for perm in analysis['dangerous_permissions']:
+                report_lines.append(f"- {perm}")
+            report_lines.append("\n---\n")
+        
+        # Critical Issues
+        if analysis.get('critical_issues'):
+            report_lines.append("## 🔴 Critical Issues")
+            report_lines.append("")
+            for issue in analysis['critical_issues']:
+                report_lines.append(f"### {issue.get('permission', 'Unknown Permission')}")
+                report_lines.append(f"**Impact**: {issue.get('impact', 'N/A')}")
+                report_lines.append(f"**Users Affected**: {issue.get('users_affected', 0)}")
+                report_lines.append("")
+            report_lines.append("\n---\n")
+        
+        # Warnings
+        if analysis.get('warnings'):
+            report_lines.append("## 🟡 Warnings")
+            report_lines.append("")
+            for warning in analysis['warnings']:
+                report_lines.append(f"- **{warning.get('permission', 'Unknown')}**: {warning.get('impact', 'N/A')}")
+            report_lines.append("\n---\n")
+        
+        # Recommendations
+        if analysis.get('recommendations'):
+            report_lines.append("## 💡 Recommendations")
+            report_lines.append("")
+            for rec in analysis['recommendations']:
+                report_lines.append(f"- {rec}")
+            report_lines.append("\n---\n")
+        
+        # AI Insight (if available)
+        if analysis.get('ai_insight'):
+            report_lines.append("## 🤖 AI Analysis")
+            report_lines.append(analysis['ai_insight'])
+            report_lines.append("\n---\n")
+        
+        # Next Steps
+        report_lines.append("## 📋 Next Steps")
+        report_lines.append("")
+        report_lines.append("1. Review all dangerous permissions listed above")
+        report_lines.append("2. Consider migrating admin-level permissions to Permission Sets")
+        report_lines.append("3. Audit users assigned to this profile")
+        report_lines.append("4. Implement least privilege principle")
+        report_lines.append("5. Schedule regular profile reviews")
+        
+        report_lines.append("\n---\n")
+        report_lines.append("*Report generated by Salesforce Security Analyzer*")
+        
+        return "\n".join(report_lines)
     
-    @staticmethod
-    def generate_recommendations(findings: List[Dict]) -> str:
-        """Generate prioritized recommendations"""
+    def _generate_priority_actions(self, analysis: Dict) -> List[Dict]:
+        """
+        Generate prioritized list of remediation actions
         
-        report = "\n## RECOMMENDED ACTIONS\n"
-        report += "━" * 80 + "\n\n"
+        Returns:
+            List of action items
+        """
+        actions = []
         
-        # Get critical and high findings
-        priority_findings = [
-            f for f in findings
-            if f['severity'] in ['critical', 'high']
+        # Critical findings
+        if analysis.get('critical_findings'):
+            actions.append({
+                'title': 'Address Critical Security Findings',
+                'description': f"Remediate {len(analysis['critical_findings'])} critical issues immediately"
+            })
+        
+        # Admin users
+        identity = analysis.get('identity_findings', {})
+        admin_count = identity.get('admin_users', 0)
+        if admin_count > 5:
+            actions.append({
+                'title': 'Reduce Admin User Count',
+                'description': f"Review {admin_count} admin users, convert to Permission Sets where possible"
+            })
+        
+        # Dangerous permissions
+        perms = analysis.get('permission_findings', {})
+        dangerous_count = perms.get('dangerous_assignments', 0)
+        if dangerous_count > 10:
+            actions.append({
+                'title': 'Review Dangerous Permission Assignments',
+                'description': f"Audit {dangerous_count} dangerous permission assignments"
+            })
+        
+        # Dormant users
+        dormant_findings = [
+            f for f in identity.get('findings', []) 
+            if f.get('type', '').startswith('Dormant User')
         ]
+        if len(dormant_findings) > 5:
+            actions.append({
+                'title': 'Deactivate Dormant Users',
+                'description': f"Review and deactivate {len(dormant_findings)} dormant user accounts"
+            })
         
-        if not priority_findings:
-            report += "✅ No critical or high priority issues found.\n"
-            report += "Continue monitoring and addressing medium/low priority items.\n\n"
-            return report
+        # MFA compliance
+        mfa_findings = [
+            f for f in identity.get('findings', []) 
+            if 'MFA' in f.get('type', '')
+        ]
+        if mfa_findings:
+            actions.append({
+                'title': 'Enforce Multi-Factor Authentication',
+                'description': "Enable MFA for all users, especially administrators"
+            })
         
-        report += "**IMMEDIATE ACTIONS (Next 24-48 hours):**\n\n"
+        # Sharing model
+        sharing = analysis.get('sharing_findings', {})
+        owd_findings = [
+            f for f in sharing.get('findings', []) 
+            if f.get('type') == 'Insecure Organization-Wide Default'
+        ]
+        if owd_findings:
+            actions.append({
+                'title': 'Secure Organization-Wide Defaults',
+                'description': f"Review and restrict {len(owd_findings)} public OWD settings"
+            })
         
-        critical_actions = {}
-        for finding in [f for f in priority_findings if f['severity'] == 'critical']:
-            action_key = finding.get('type', 'general')
-            if action_key not in critical_actions:
-                critical_actions[action_key] = []
-            critical_actions[action_key].append(finding['title'])
-        
-        action_num = 1
-        for action_type, items in critical_actions.items():
-            report += f"{action_num}. **{action_type}**\n"
-            for item in items[:3]:  # Top 3 per type
-                report += f"   - {item}\n"
-            action_num += 1
-        
-        report += "\n**SHORT-TERM ACTIONS (Next 1-2 weeks):**\n\n"
-        
-        high_findings = [f for f in priority_findings if f['severity'] == 'high'][:5]
-        for idx, finding in enumerate(high_findings, action_num):
-            report += f"{idx}. {finding['title']}\n"
-        
-        report += "\n"
-        return report
-    
-    @staticmethod
-    def generate_compliance_notes() -> str:
-        """Generate compliance and best practices section"""
-        
-        return """
-## COMPLIANCE & BEST PRACTICES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**SOC 2 Considerations:**
-- Implement principle of least privilege
-- Enable MFA for all users
-- Regular access reviews (quarterly)
-- Audit trail monitoring
-
-**GDPR Requirements:**
-- Minimize data access
-- Implement data retention policies
-- Document legitimate data access purposes
-- Enable field audit trail
-
-**Best Practices:**
-- Use Permission Sets over modifying Profiles
-- Implement Private OWD with sharing rules
-- Regular permission audits
-- Deactivate unused accounts within 30 days
-- Enable Event Monitoring
-
-**Next Steps:**
-1. Address all Critical findings immediately
-2. Create remediation plan for High priority items
-3. Schedule monthly security reviews
-4. Implement automated monitoring
-
-"""
-    
-    @staticmethod
-    def generate_full_report(findings: List[Dict], data: Dict, ai_recommendations: str = None) -> str:
-        """Generate complete security report"""
-        
-        report = ReportGenerator.generate_executive_summary(findings, data)
-        
-        if ai_recommendations:
-            report += "\n## AI-POWERED INSIGHTS\n"
-            report += "━" * 80 + "\n"
-            report += ai_recommendations + "\n\n"
-        
-        report += ReportGenerator.format_findings_by_severity(findings)
-        report += ReportGenerator.generate_recommendations(findings)
-        report += ReportGenerator.generate_compliance_notes()
-        
-        report += "━" * 80 + "\n"
-        report += f"End of Report - Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        
-        return report
-    
-    @staticmethod
-    def export_to_json(findings: List[Dict], data: Dict, filename: str = None) -> str:
-        """Export findings to JSON format"""
-        
-        if filename is None:
-            filename = f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        export_data = {
-            'generated_at': datetime.now().isoformat(),
-            'org_id': data.get('org_id'),
-            'summary': {
-                'total_findings': len(findings),
-                'critical': len([f for f in findings if f['severity'] == 'critical']),
-                'high': len([f for f in findings if f['severity'] == 'high']),
-                'medium': len([f for f in findings if f['severity'] == 'medium']),
-                'low': len([f for f in findings if f['severity'] == 'low'])
-            },
-            'findings': findings,
-            'metadata': data.get('summary', {})
-        }
-        
-        with open(filename, 'w') as f:
-            json.dump(export_data, f, indent=2)
-        
-        return filename
-    
-    @staticmethod
-    def generate_summary_stats(findings: List[Dict]) -> Dict[str, Any]:
-        """Generate summary statistics"""
-        
-        stats = {
-            'total_findings': len(findings),
-            'by_severity': {
-                'critical': 0,
-                'high': 0,
-                'medium': 0,
-                'low': 0
-            },
-            'by_category': {},
-            'top_issues': []
-        }
-        
-        for finding in findings:
-            # Count by severity
-            severity = finding.get('severity', 'low')
-            stats['by_severity'][severity] = stats['by_severity'].get(severity, 0) + 1
-            
-            # Count by category
-            category = finding.get('type', finding.get('category', 'Other'))
-            stats['by_category'][category] = stats['by_category'].get(category, 0) + 1
-        
-        # Get top issues (critical and high only)
-        stats['top_issues'] = [
-            finding['title'] for finding in findings
-            if finding['severity'] in ['critical', 'high']
-        ][:10]
-        
-        return stats
+        return actions[:7]  # Return top 7 actions
