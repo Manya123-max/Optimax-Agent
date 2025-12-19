@@ -1,402 +1,263 @@
-"""
-CodeGen-based Security Analyzer
-Uses open-source models for vulnerability detection
-"""
-
-import requests
-import json
-from typing import Dict, List, Any
-import time
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+from typing import Dict, List
+from analyzers.permission_analyzer import PermissionAnalyzer
+from analyzers.sharing_analyzer import SharingAnalyzer
+from analyzers.identity_analyzer import IdentityAnalyzer
 
 class CodeGenSecurityAnalyzer:
-    """Open-source model-based security analyzer"""
+    """
+    AI-powered security analyzer using CodeGen model
+    """
     
-    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.2", hf_token=None):
+    def __init__(self, model_name: str = "Salesforce/codegen-350M-mono"):
         """
-        Initialize with Hugging Face model
+        Initialize CodeGen analyzer
         
-        Recommended models:
-        - mistralai/Mistral-7B-Instruct-v0.2 (lightweight, fast)
-        - codellama/CodeLlama-13b-Instruct-hf (better for code)
-        - Salesforce/codegen2-16B (best but requires GPU)
+        Args:
+            model_name: HuggingFace model identifier
         """
-        self.model_name = model_name
-        self.hf_token = hf_token
-        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
-        
-        # For local deployment
-        self.local_mode = False
-        self.local_pipeline = None
-    
-    def initialize_local_model(self):
-        """Initialize model locally (requires GPU/CPU with sufficient RAM)"""
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-        
-        print(f"Loading {self.model_name} locally...")
-        
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            device_map="auto",  # Automatically use available devices
-            load_in_8bit=True,  # Use 8-bit quantization to reduce memory
+        print(f"Loading model: {model_name}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            low_cpu_mem_usage=True
         )
         
-        self.local_pipeline = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=2000,
-            temperature=0.1,
-            do_sample=True,
-        )
+        if torch.cuda.is_available():
+            self.model = self.model.cuda()
         
-        self.local_mode = True
         print("Model loaded successfully!")
     
-    def generate_response(self, prompt: str, max_tokens: int = 2000) -> str:
-        """Generate response using HF Inference API or local model"""
+    def generate_response(self, prompt: str, max_length: int = 500) -> str:
+        """
+        Generate AI response for security analysis
         
-        if self.local_mode:
-            return self._generate_local(prompt, max_tokens)
-        else:
-            return self._generate_api(prompt, max_tokens)
+        Args:
+            prompt: Input prompt describing the security context
+            max_length: Maximum tokens to generate
+            
+        Returns:
+            Generated analysis text
+        """
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        
+        if torch.cuda.is_available():
+            inputs = {k: v.cuda() for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_length=max_length,
+                temperature=0.7,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+        
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return response.replace(prompt, "").strip()
+
+
+class HybridAnalyzer:
+    """
+    Hybrid analyzer combining rule-based checks with AI insights
+    Recommended for production use
+    """
     
-    def _generate_api(self, prompt: str, max_tokens: int) -> str:
-        """Use Hugging Face Inference API"""
-        headers = {}
-        if self.hf_token:
-            headers["Authorization"] = f"Bearer {self.hf_token}"
+    def __init__(self, model_name: str = "Salesforce/codegen-350M-mono", use_rule_based: bool = True):
+        """
+        Initialize hybrid analyzer
         
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": max_tokens,
-                "temperature": 0.1,
-                "top_p": 0.9,
-                "do_sample": True,
-                "return_full_text": False
-            }
+        Args:
+            model_name: CodeGen model to use
+            use_rule_based: Whether to include rule-based analysis (recommended)
+        """
+        self.use_rule_based = use_rule_based
+        self.ai_analyzer = None
+        
+        # Initialize rule-based analyzers
+        self.permission_analyzer = PermissionAnalyzer()
+        self.sharing_analyzer = SharingAnalyzer()
+        self.identity_analyzer = IdentityAnalyzer()
+        
+        # Initialize AI analyzer (optional for enhanced insights)
+        try:
+            if not use_rule_based:  # Only load AI if not using rule-based
+                self.ai_analyzer = CodeGenSecurityAnalyzer(model_name)
+        except Exception as e:
+            print(f"Warning: Could not load AI model: {e}. Using rule-based only.")
+            self.use_rule_based = True
+    
+    def analyze_full_org(
+        self,
+        users: List[Dict],
+        permission_sets: List[Dict],
+        profiles: List[Dict],
+        sharing_settings: Dict,
+        login_history: List[Dict]
+    ) -> Dict:
+        """
+        Perform comprehensive organization security analysis
+        
+        Returns:
+            Complete analysis report
+        """
+        analysis_report = {
+            'summary': {},
+            'critical_findings': [],
+            'high_risk_findings': [],
+            'medium_risk_findings': [],
+            'recommendations': [],
+            'metrics': {}
         }
         
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(
-                    self.api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60
-                )
-                
-                if response.status_code == 503:
-                    # Model is loading, wait and retry
-                    wait_time = 20 * (attempt + 1)
-                    print(f"Model loading, waiting {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("generated_text", "")
-                elif isinstance(result, dict):
-                    return result.get("generated_text", "")
-                
-                return str(result)
-                
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    raise Exception(f"API request failed after {max_retries} attempts: {e}")
-                time.sleep(5)
+        # 1. Identity & Access Management Analysis
+        print("Analyzing identity & access management...")
+        identity_results = self.identity_analyzer.analyze_users(users, login_history)
+        analysis_report['identity_findings'] = identity_results
         
-        raise Exception("Failed to generate response")
-    
-    def _generate_local(self, prompt: str, max_tokens: int) -> str:
-        """Generate using local model"""
-        result = self.local_pipeline(
-            prompt,
-            max_new_tokens=max_tokens,
-            temperature=0.1,
-            do_sample=True
+        # 2. Permission & Authorization Analysis
+        print("Analyzing permissions and authorization...")
+        permission_results = self.permission_analyzer.analyze_all_permissions(
+            permission_sets, profiles
         )
-        return result[0]["generated_text"]
+        analysis_report['permission_findings'] = permission_results
+        
+        # 3. Sharing Model Analysis
+        print("Analyzing sharing model...")
+        sharing_results = self.sharing_analyzer.analyze_sharing_settings(sharing_settings)
+        analysis_report['sharing_findings'] = sharing_results
+        
+        # 4. Aggregate findings by severity
+        self._aggregate_findings(analysis_report)
+        
+        # 5. Generate AI-enhanced recommendations (if enabled)
+        if self.ai_analyzer:
+            ai_recommendations = self._get_ai_recommendations(analysis_report)
+            analysis_report['ai_recommendations'] = ai_recommendations
+        
+        return analysis_report
     
-    def analyze_full_org(self, data: Dict[str, Any]) -> str:
-        """Analyze organization security"""
+    def analyze_profile(self, profile_data: Dict) -> Dict:
+        """
+        Analyze a specific profile for security issues
         
-        # Structure the analysis prompt
-        prompt = self._create_full_scan_prompt(data)
+        Args:
+            profile_data: Profile information from Salesforce
+            
+        Returns:
+            Profile analysis report
+        """
+        analysis_report = {
+            'profile_name': profile_data.get('Name', 'Unknown'),
+            'profile_id': profile_data.get('Id', 'Unknown'),
+            'assigned_users': len(profile_data.get('AssignedUsers', [])),
+            'critical_issues': [],
+            'warnings': [],
+            'recommendations': [],
+            'risk_score': 0
+        }
         
-        # Generate analysis
-        analysis = self.generate_response(prompt, max_tokens=3000)
+        # Analyze profile using rule-based analyzer
+        profile_results = self.permission_analyzer.analyze_profile(profile_data)
         
-        # Post-process and format
-        formatted_report = self._format_report(analysis, data)
+        # Merge results
+        analysis_report.update(profile_results)
         
-        return formatted_report
+        # Generate AI insights if available
+        if self.ai_analyzer:
+            prompt = self._create_profile_prompt(profile_data, profile_results)
+            ai_insight = self.ai_analyzer.generate_response(prompt, max_length=300)
+            analysis_report['ai_insight'] = ai_insight
+        
+        return analysis_report
     
-    def analyze_profile(self, data: Dict[str, Any]) -> str:
-        """Analyze specific profile"""
+    def _aggregate_findings(self, report: Dict):
+        """
+        Aggregate findings from all analyzers by severity
+        """
+        # Collect all findings
+        all_findings = []
         
-        prompt = self._create_profile_scan_prompt(data)
-        analysis = self.generate_response(prompt, max_tokens=2000)
-        formatted_report = self._format_profile_report(analysis, data)
+        # From identity analysis
+        if 'identity_findings' in report:
+            all_findings.extend(report['identity_findings'].get('findings', []))
         
-        return formatted_report
+        # From permission analysis
+        if 'permission_findings' in report:
+            all_findings.extend(report['permission_findings'].get('findings', []))
+        
+        # From sharing analysis
+        if 'sharing_findings' in report:
+            all_findings.extend(report['sharing_findings'].get('findings', []))
+        
+        # Sort by severity
+        for finding in all_findings:
+            severity = finding.get('severity', 'Low').lower()
+            
+            if severity == 'critical':
+                report['critical_findings'].append(finding)
+            elif severity == 'high':
+                report['high_risk_findings'].append(finding)
+            elif severity == 'medium':
+                report['medium_risk_findings'].append(finding)
+        
+        # Calculate metrics
+        report['metrics'] = {
+            'total_findings': len(all_findings),
+            'critical_count': len(report['critical_findings']),
+            'high_count': len(report['high_risk_findings']),
+            'medium_count': len(report['medium_risk_findings']),
+            'overall_risk_score': self._calculate_risk_score(report)
+        }
     
-    def _create_full_scan_prompt(self, data: Dict[str, Any]) -> str:
-        """Create optimized prompt for open-source models"""
+    def _calculate_risk_score(self, report: Dict) -> int:
+        """
+        Calculate overall organization risk score (0-100)
+        """
+        critical = len(report['critical_findings']) * 25
+        high = len(report['high_risk_findings']) * 10
+        medium = len(report['medium_risk_findings']) * 3
         
-        # Extract key statistics
-        stats = data.get('summary', {})
+        score = min(100, critical + high + medium)
+        return score
+    
+    def _get_ai_recommendations(self, report: Dict) -> str:
+        """
+        Generate AI-powered recommendations
+        """
+        if not self.ai_analyzer:
+            return "AI recommendations not available"
         
-        # Build concise prompt (open-source models work better with shorter context)
-        prompt = f"""<s>[INST] You are a Salesforce security expert. Analyze this organization for vulnerabilities.
-
-ORGANIZATION DATA:
-- Total Users: {stats.get('total_users', 0)}
-- Admin Users: {stats.get('admin_users', 0)}
-- Dormant Users: {stats.get('dormant_users', 0)}
-- Permission Sets: {stats.get('permission_sets', 0)}
-- Dangerous Permission Sets: {stats.get('dangerous_permission_sets', 0)}
-- Public Read/Write Objects: {stats.get('public_read_write_objects', 0)}
-
-DANGEROUS PERMISSION SETS:
-{json.dumps(data.get('permissions', {}).get('dangerous_permission_sets', [])[:5], indent=2)}
-
-PUBLIC OBJECTS:
-{json.dumps(data.get('sharing_model', {}).get('public_read_write_objects', [])[:5], indent=2)}
-
-DORMANT ADMINS:
-{json.dumps(data.get('identity_access', {}).get('admin_users', [])[:5], indent=2)}
-
-Analyze these findings and provide:
-1. CRITICAL ISSUES (severity: critical)
-2. HIGH PRIORITY ISSUES (severity: high)
-3. RECOMMENDATIONS (specific actions)
-
-Format as clear sections with bullet points. [/INST]"""
-
+        # Create prompt summarizing findings
+        prompt = f"""
+        Salesforce Security Analysis Summary:
+        - Critical Issues: {len(report['critical_findings'])}
+        - High Risk Issues: {len(report['high_risk_findings'])}
+        - Medium Risk Issues: {len(report['medium_risk_findings'])}
+        
+        Top Critical Issue: {report['critical_findings'][0]['description'] if report['critical_findings'] else 'None'}
+        
+        Provide 3 prioritized security recommendations:
+        """
+        
+        return self.ai_analyzer.generate_response(prompt, max_length=400)
+    
+    def _create_profile_prompt(self, profile_data: Dict, analysis: Dict) -> str:
+        """
+        Create AI prompt for profile analysis
+        """
+        dangerous_perms = analysis.get('dangerous_permissions', [])
+        
+        prompt = f"""
+        Analyze this Salesforce Profile security:
+        Profile: {profile_data.get('Name')}
+        Users: {len(profile_data.get('AssignedUsers', []))}
+        Dangerous Permissions: {', '.join(dangerous_perms) if dangerous_perms else 'None'}
+        
+        Security recommendation:
+        """
+        
         return prompt
-    
-    def _create_profile_scan_prompt(self, data: Dict[str, Any]) -> str:
-        """Create profile analysis prompt"""
-        
-        profile_info = data.get('profile_info', {})
-        obj_perms = data.get('object_permissions', {})
-        
-        prompt = f"""<s>[INST] Analyze this Salesforce profile for security issues.
-
-PROFILE: {profile_info.get('Name')}
-ID: {profile_info.get('Id')}
-
-OBJECT PERMISSIONS:
-- Full CRUD Objects: {obj_perms.get('full_crud_count', 0)}
-- View All Records: {len(obj_perms.get('view_all_records', []))}
-- Modify All Records: {len(obj_perms.get('modify_all_records', []))}
-
-Objects with View All: {', '.join(obj_perms.get('view_all_records', [])[:10])}
-Objects with Modify All: {', '.join(obj_perms.get('modify_all_records', [])[:10])}
-
-Identify security risks and provide recommendations. [/INST]"""
-
-        return prompt
-    
-    def _format_report(self, analysis: str, data: Dict[str, Any]) -> str:
-        """Format the model output into a structured report"""
-        
-        stats = data.get('summary', {})
-        
-        report = f"""
-# SALESFORCE SECURITY ANALYSIS REPORT
-Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-## EXECUTIVE SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Total Users Analyzed: {stats.get('total_users', 0)}
-Admin Users: {stats.get('admin_users', 0)}
-Dormant Accounts: {stats.get('dormant_users', 0)}
-Dangerous Permission Sets: {stats.get('dangerous_permission_sets', 0)}
-Public Read/Write Objects: {stats.get('public_read_write_objects', 0)}
-
-## AI SECURITY ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{analysis}
-
-## DETAILED FINDINGS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-### Permission Sets with Dangerous Permissions:
-"""
-        
-        for ps in data.get('permissions', {}).get('dangerous_permission_sets', [])[:10]:
-            report += f"\n• {ps['Label']}\n"
-            report += f"  - Permissions: {', '.join(ps['DangerousPermissions'])}\n"
-            report += f"  - Assigned to: {ps['AssignedToUserCount']} users\n"
-        
-        report += "\n### Public Read/Write Objects:\n"
-        for obj in data.get('sharing_model', {}).get('public_read_write_objects', [])[:10]:
-            report += f"\n• {obj['Label']} ({obj['Object']})\n"
-            report += f"  - Sharing Model: {obj['SharingModel']}\n"
-        
-        report += "\n### Dormant Administrator Accounts:\n"
-        for admin in data.get('identity_access', {}).get('admin_users', [])[:10]:
-            if admin.get('IsDormant'):
-                report += f"\n• {admin['Name']} ({admin['Username']})\n"
-                report += f"  - Last Login: {admin.get('LastLogin', 'Never')}\n"
-        
-        report += "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        report += "End of Report\n"
-        
-        return report
-    
-    def _format_profile_report(self, analysis: str, data: Dict[str, Any]) -> str:
-        """Format profile analysis report"""
-        
-        profile_info = data.get('profile_info', {})
-        obj_perms = data.get('object_permissions', {})
-        
-        report = f"""
-# PROFILE SECURITY ANALYSIS
-Profile: {profile_info.get('Name')}
-ID: {profile_info.get('Id')}
-Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-## AI ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{analysis}
-
-## PERMISSION DETAILS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-### Objects with Full CRUD: {obj_perms.get('full_crud_count', 0)}
-{', '.join(obj_perms.get('full_crud_objects', [])[:20])}
-
-### Objects with View All Records:
-{', '.join(obj_perms.get('view_all_records', []))}
-
-### Objects with Modify All Records:
-{', '.join(obj_perms.get('modify_all_records', []))}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-End of Report
-"""
-        return report
-
-
-# Lightweight alternative using rule-based analysis + CodeGen
-class HybridAnalyzer(CodeGenSecurityAnalyzer):
-    """Combines rule-based detection with AI analysis"""
-    
-    def analyze_full_org(self, data: Dict[str, Any]) -> str:
-        """Hybrid approach: Rules + AI"""
-        
-        # Step 1: Rule-based detection (fast, accurate)
-        rule_findings = self._rule_based_analysis(data)
-        
-        # Step 2: AI analysis for context and recommendations
-        ai_context = self._get_ai_recommendations(rule_findings)
-        
-        # Step 3: Combine into report
-        return self._create_hybrid_report(rule_findings, ai_context, data)
-    
-    def _rule_based_analysis(self, data: Dict[str, Any]) -> List[Dict]:
-        """Fast rule-based vulnerability detection"""
-        findings = []
-        
-        # Check dangerous permission sets
-        for ps in data.get('permissions', {}).get('dangerous_permission_sets', []):
-            for perm in ps['DangerousPermissions']:
-                findings.append({
-                    'severity': 'critical' if 'Modify' in perm or 'View' in perm else 'high',
-                    'type': 'Dangerous Permission',
-                    'title': f"{perm} in {ps['Label']}",
-                    'detail': f"Assigned to {ps['AssignedToUserCount']} users",
-                    'users': ps.get('AssignedUsers', [])
-                })
-        
-        # Check public objects
-        for obj in data.get('sharing_model', {}).get('public_read_write_objects', []):
-            findings.append({
-                'severity': 'critical',
-                'type': 'Sharing Misconfiguration',
-                'title': f"Public Read/Write on {obj['Label']}",
-                'detail': f"All users can view and modify {obj['Object']} records"
-            })
-        
-        # Check dormant admins
-        dormant_admins = data.get('identity_access', {}).get('admin_users', [])
-        for admin in dormant_admins:
-            if admin.get('IsDormant'):
-                findings.append({
-                    'severity': 'high',
-                    'type': 'Dormant Account',
-                    'title': f"Inactive admin: {admin['Name']}",
-                    'detail': f"Last login: {admin.get('LastLogin', 'Never')}"
-                })
-        
-        return findings
-    
-    def _get_ai_recommendations(self, findings: List[Dict]) -> str:
-        """Get AI-powered recommendations for findings"""
-        
-        # Create concise summary for AI
-        summary = f"Found {len(findings)} security issues:\n"
-        for f in findings[:10]:  # Limit to top 10
-            summary += f"- [{f['severity'].upper()}] {f['title']}\n"
-        
-        prompt = f"""<s>[INST] As a Salesforce security expert, provide recommendations for these findings:
-
-{summary}
-
-Provide 3-5 prioritized remediation steps. [/INST]"""
-        
-        return self.generate_response(prompt, max_tokens=500)
-    
-    def _create_hybrid_report(self, findings: List[Dict], ai_recs: str, data: Dict) -> str:
-        """Create comprehensive hybrid report"""
-        
-        # Group by severity
-        critical = [f for f in findings if f['severity'] == 'critical']
-        high = [f for f in findings if f['severity'] == 'high']
-        medium = [f for f in findings if f['severity'] == 'medium']
-        
-        report = f"""
-# SALESFORCE SECURITY REPORT (HYBRID ANALYSIS)
-Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-## SUMMARY
-Total Issues Found: {len(findings)}
-├── Critical: {len(critical)}
-├── High: {len(high)}
-└── Medium: {len(medium)}
-
-## CRITICAL FINDINGS ({len(critical)})
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
-        
-        for f in critical:
-            report += f"\n🔴 {f['title']}\n"
-            report += f"   Type: {f['type']}\n"
-            report += f"   {f['detail']}\n"
-            if f.get('users'):
-                report += f"   Affected: {', '.join(f['users'][:5])}\n"
-        
-        report += f"\n## HIGH PRIORITY FINDINGS ({len(high)})\n"
-        report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        
-        for f in high[:10]:
-            report += f"\n🟠 {f['title']}\n"
-            report += f"   {f['detail']}\n"
-        
-        report += "\n## AI-POWERED RECOMMENDATIONS\n"
-        report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        report += ai_recs
-        
-        report += "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        
-        return report
