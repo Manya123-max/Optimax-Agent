@@ -46,6 +46,11 @@ class PermissionAnalyzer:
             'severity': 'High',
             'description': 'Modify Metadata - Change org configuration',
             'impact': 'Can alter security settings and configurations'
+        },
+        'PermissionsYourCustomCheck': {
+        'severity': 'High',
+        'description': 'Your custom permission',
+        'impact': 'Impact description'
         }
     }
     
