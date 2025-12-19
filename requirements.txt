@@ -1,8 +1,20 @@
-gradio==4.10.0
-simple-salesforce==1.12.4
-langchain==0.1.0
-langchain-anthropic==0.1.0
-anthropic==0.8.0
-python-dotenv==1.0.0
-pandas==2.1.4
+# Core Dependencies
+gradio==4.44.0
+simple-salesforce==1.12.6
 requests==2.31.0
+python-dotenv==1.0.1
+
+# For Hugging Face Inference API (lightweight)
+huggingface-hub==0.24.0
+
+# Optional: For local model deployment (if you have GPU)
+# Uncomment these if running models locally
+# transformers==4.44.0
+# torch==2.1.2
+# accelerate==0.25.0
+# bitsandbytes==0.41.3  # For 8-bit quantization
+# sentencepiece==0.1.99  # For some tokenizers
+
+# Utilities
+pandas==2.1.4
+numpy==1.26.2
