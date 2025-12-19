@@ -5,12 +5,12 @@ requests==2.31.0
 python-dotenv==1.0.1
 
 # For Hugging Face Inference API (lightweight)
-huggingface-hub==0.24.0
+transformers==4.41.2
+huggingface-hub==0.23.5
+torch==2.1.0
 
 # Optional: For local model deployment (if you have GPU)
 # Uncomment these if running models locally
-transformers==4.44.0
-torch==2.1.2
 accelerate==0.25.0
 # bitsandbytes==0.41.3  # For 8-bit quantization
 sentencepiece==0.1.99  # For some tokenizers
