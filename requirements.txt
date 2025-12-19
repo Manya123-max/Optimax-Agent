@@ -9,12 +9,14 @@ huggingface-hub==0.24.0
 
 # Optional: For local model deployment (if you have GPU)
 # Uncomment these if running models locally
-# transformers==4.44.0
-# torch==2.1.2
-# accelerate==0.25.0
+transformers==4.44.0
+torch==2.1.2
+accelerate==0.25.0
 # bitsandbytes==0.41.3  # For 8-bit quantization
-# sentencepiece==0.1.99  # For some tokenizers
+sentencepiece==0.1.99  # For some tokenizers
 
 # Utilities
 pandas==2.1.4
 numpy==1.26.2
+
+protobuf==4.25.1
