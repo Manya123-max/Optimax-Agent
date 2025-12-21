@@ -1,6 +1,6 @@
 
 # analyzers/sharing_analyzer.py
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 
 class SharingAnalyzer:
