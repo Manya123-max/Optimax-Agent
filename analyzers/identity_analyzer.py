@@ -1,6 +1,7 @@
 
 # analyzers/identity_analyzer.py
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 class IdentityAnalyzer:
     """
