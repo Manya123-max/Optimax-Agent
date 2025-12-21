@@ -1,11 +1,14 @@
+# Full AI + Rule-Based Analysis
+# Compatible with Hugging Face Spaces (huggingface-hub 1.2.3)
+
 gradio==4.44.0
-transformers==4.46.0
-huggingface-hub==0.26.2
-torch==2.1.0
+transformers==4.47.1
+torch==2.5.1
 python-dotenv==1.0.0
 pandas==2.1.3
 requests==2.31.0
-accelerate==0.25.0
-sentencepiece==0.1.99
+accelerate==1.2.1
+sentencepiece==0.2.0
 protobuf==4.25.1
-safetensors==0.4.1
+safetensors==0.4.5
+tokenizers==0.21.0
