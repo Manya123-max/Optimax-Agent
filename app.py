@@ -13,6 +13,7 @@ def analyze_salesforce_org(
     client_secret: str,
     username: str,
     password: str,
+    security_token: str,
     scan_type: str,
     profile_id: str = None,
     is_sandbox: bool = False
@@ -27,6 +28,7 @@ def analyze_salesforce_org(
             client_secret=client_secret,
             username=username,
             password=password,
+            security_token=security_token,
             is_sandbox=is_sandbox
         )
         
@@ -176,6 +178,13 @@ with gr.Blocks(title="Salesforce Security Analyzer - OAuth", theme=gr.themes.Sof
                 info="Your SSO password (for OAuth flow only, not stored)"
             )
             
+            security_token = gr.Textbox(
+                label="Salesforce Security Token",
+                type="password",
+                placeholder="Your security token",
+                info="Find in Salesforce Settings -> Reset My Security Token"
+            )
+
             is_sandbox = gr.Checkbox(
                 label="Sandbox Environment",
                 value=False,
@@ -223,7 +232,7 @@ with gr.Blocks(title="Salesforce Security Analyzer - OAuth", theme=gr.themes.Sof
     # Button click handler
     analyze_btn.click(
         fn=analyze_salesforce_org,
-        inputs=[org_id, client_id, client_secret, username, password, scan_type, profile_id, is_sandbox],
+        inputs=[org_id, client_id, client_secret, username, password, security_token, scan_type, profile_id, is_sandbox],
         outputs=[output]
     )
     
