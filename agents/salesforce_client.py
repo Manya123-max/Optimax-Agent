@@ -6,10 +6,10 @@ import json
 class SalesforceOAuthClient:
     """
     OAuth 2.0 wrapper for Salesforce API - Works with SSO-enabled orgs
-    No security token needed!
+    Now with Security Token support!
     """
     
-    def __init__(self, client_id: str, client_secret: str, username: str, password: str, is_sandbox: bool = False):
+    def __init__(self, client_id: str, client_secret: str, username: str, password: str, security_token: str, is_sandbox: bool = False):
         """
         Initialize Salesforce OAuth client
         
@@ -18,12 +18,14 @@ class SalesforceOAuthClient:
             client_secret: Connected App Consumer Secret
             username: Salesforce username (SSO email)
             password: Salesforce password (SSO password)
+            security_token: Salesforce security token
             is_sandbox: True if connecting to sandbox
         """
         self.client_id = client_id
         self.client_secret = client_secret
         self.username = username
         self.password = password
+        self.security_token = security_token
         self.is_sandbox = is_sandbox
         
         # OAuth endpoints
@@ -45,12 +47,16 @@ class SalesforceOAuthClient:
         """
         try:
             # OAuth 2.0 Password Flow (Resource Owner Password Credentials)
+
+            # Append security token to password if provided
+            password_with_token = self.password + self.security_token if self.security_token else self.password
+
             payload = {
                 'grant_type': 'password',
                 'client_id': self.client_id,
                 'client_secret': self.client_secret,
                 'username': self.username,
-                'password': self.password
+                'password': password_with_token
             }
             
             response = requests.post(self.token_url, data=payload, timeout=30)
